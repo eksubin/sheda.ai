@@ -4,7 +4,7 @@ This file gives Claude Code the context it needs to work in this repo. Read this
 
 ## What this project is
 
-ShiftConfirm — a voice-AI caregiver scheduling assistant built for the Arya Health Hack (luma.com/arya-health-hack). It automatically calls caregivers to confirm upcoming shifts, and if a caregiver can't make it, it can call a friend/colleague they've referred to cover the shift instead — a fully automated hand-off chain.
+Sheda AI — a voice-AI caregiver scheduling assistant built for the Arya Health Hack (luma.com/arya-health-hack). It automatically calls caregivers to confirm upcoming shifts, and if a caregiver can't make it, it can call a friend/colleague they've referred to cover the shift instead — a fully automated hand-off chain.
 
 Why this shape: the hackathon's sponsor, Arya Health, builds AI agents for post-acute/home-care administration with multimodal (voice/text/email) communication that reads/writes to an EMR-like system of record. This project is a narrow, demoable slice of that: caregiver scheduling confirmation over real phone calls.
 

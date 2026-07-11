@@ -1,6 +1,6 @@
 {
-  "name": "ShiftConfirm - Primary",
-  "firstMessage": "Hi, this is an automated call from ShiftConfirm calling on behalf of the care team. Could I get your first name, please?",
+  "name": "Sheda AI - Primary",
+  "firstMessage": "Hi, this is an automated call from Sheda AI calling on behalf of the care team. Could I get your first name, please?",
   "model": {
     "provider": "openai",
     "model": "gpt-4o",

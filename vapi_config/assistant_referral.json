@@ -1,6 +1,6 @@
 {
-  "name": "ShiftConfirm - Referral",
-  "firstMessage": "Hi, is this {{referred_name}}? This is an automated call from ShiftConfirm, a scheduling service — {{referring_caregiver_name}} gave us your number as someone who might be able to cover a caregiving shift. Do you have a quick minute?",
+  "name": "Sheda AI - Referral",
+  "firstMessage": "Hi, is this {{referred_name}}? This is an automated call from Sheda AI, a scheduling service — {{referring_caregiver_name}} gave us your number as someone who might be able to cover a caregiving shift. Do you have a quick minute?",
   "model": {
     "provider": "openai",
     "model": "gpt-4o",
