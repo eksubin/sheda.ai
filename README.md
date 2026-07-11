@@ -1,8 +1,15 @@
-# ShiftConfirm
+# Sheda AI
 
-Voice-AI caregiver scheduling assistant — built for the Arya Health Hack. Automatically calls caregivers to confirm upcoming shifts, and if they can't make it, calls a referred friend to cover it instead.
+Sheda AI is a voice-AI scheduling agent for nurse and home-care managers, built for the Arya Health Hack. It calls caregivers to confirm upcoming shifts, and if someone can't make it and names a coworker to cover, it automatically calls that person too — a live, automated hand-off chain. Everything lands in Postgres in real time and shows up on a calendar dashboard where a manager can also ask an AI copilot about any shift, or manually request coverage from a ranked list of available caregivers.
 
 See [CLAUDE.md](CLAUDE.md) for full architecture, flow, and Vapi integration notes.
+
+## What it does
+
+- **Confirmation calls.** Trigger a real (or browser-test) call to a caregiver ahead of their shift; the call outcome updates the shift's status live.
+- **Automated hand-off.** If a caregiver can't make it and names a friend with a phone number, a second call goes out immediately to that person — no dispatcher required.
+- **Calendar dashboard.** A week-view calendar (day/evening/night/on-call color-coded) with live status, a candidate-matching panel for shifts that need coverage, and an AI chat panel for asking about any specific shift.
+- **Full call/referral history**, transcripts, and outcomes stored per shift for audit.
 
 ## Setup
 
@@ -15,18 +22,19 @@ See [CLAUDE.md](CLAUDE.md) for full architecture, flow, and Vapi integration not
    python scripts/register_assistants.py
    ```
    Copy the printed `VAPI_ASSISTANT_PRIMARY_ID` / `VAPI_ASSISTANT_REFERRAL_ID` into `.env`.
-5. Start everything:
+5. (Optional) Add an `ANTHROPIC_API_KEY` to `.env` to enable the AI chat panel on the dashboard.
+6. Start everything:
    ```bash
    docker compose up --build
    ```
 
 API: `http://localhost:8000` (docs at `/docs`). Dashboard: `http://localhost:8000/`.
 
-Postgres is seeded with 2 demo caregivers and 1 demo shift on first boot (`init.sql`).
+Postgres is seeded with 5 demo caregivers and 5 demo shifts across a range of statuses on first boot (`init.sql`). If you're updating an existing (already-running) database rather than starting fresh, apply `migrations/0001_calendar_ui.sql` by hand — `init.sql` only runs on an empty volume.
 
 ## Triggering a call
 
-From the dashboard, click "Call" next to a scheduled shift — or directly:
+Click a shift on the dashboard calendar, then **Call** (browser test call or, if `VAPI_PHONE_NUMBER_ID` is set, a real one) or **Call Phone** (always a real outbound call) in the popup — or directly:
 
 ```bash
 curl -X POST http://localhost:8000/shifts/1/call
