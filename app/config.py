@@ -10,6 +10,7 @@ class Settings:
     vapi_assistant_primary_id: str = os.environ["VAPI_ASSISTANT_PRIMARY_ID"]
     vapi_assistant_referral_id: str = os.environ["VAPI_ASSISTANT_REFERRAL_ID"]
     webhook_base_url: str = os.environ["WEBHOOK_BASE_URL"]
+    anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "")
 
 
 settings = Settings()

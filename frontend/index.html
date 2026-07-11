@@ -1,20 +1,807 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sheda AI — Nurse Schedule</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap"
-      rel="stylesheet"
-    />
-    <script type="module" crossorigin src="/assets/index-CsNNm3gn.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-D7yvMNC4.css">
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
+<head>
+<meta charset="UTF-8" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ShiftConfirm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="sidebar__logo">S</div>
+    <div class="sidebar__item sidebar__item--active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg>
+      Shifts
+    </div>
+    <div class="sidebar__avatar">SC</div>
+  </nav>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar__today" id="today-badge"></div>
+      <div class="topbar__nav">
+        <button class="topbar__navbtn" id="prev-week" title="Previous week">‹</button>
+        <div class="topbar__title" id="week-title"></div>
+        <button class="topbar__navbtn" id="next-week" title="Next week">›</button>
+      </div>
+      <div class="topbar__badge" id="call-mode-badge"><span class="dot"></span><span id="call-mode-text">Loading…</span></div>
+    </div>
+
+    <div class="stats" id="stats-row"></div>
+
+    <div class="calcard">
+      <div class="calcard__bar">
+        <div class="seg"><button class="seg__btn seg__btn--on">Week</button></div>
+        <div class="legend">
+          <span><i style="background:#e3efff"></i>Day</span>
+          <span><i style="background:#efeaff"></i>Evening</span>
+          <span><i style="background:#e0f4f1"></i>Night</span>
+          <span><i style="background:#fdeef7"></i>On-call</span>
+        </div>
+        <button class="reset-btn" id="reset-btn" title="Reset all shifts to scheduled and clear referrals/call logs">↺ Reset demo data</button>
+      </div>
+      <div class="calgrid">
+        <div class="calgrid__inner" id="calgrid-inner"></div>
+      </div>
+    </div>
+  </main>
+
+  <aside class="ai" id="ai-panel">
+    <div class="ai__head">
+      <div class="ai__orb"></div>
+      <div>
+        <div class="ai__title" id="ai-title">Select a shift</div>
+        <div class="ai__status" id="ai-status"></div>
+      </div>
+      <button class="ai__call" id="ai-call-btn" disabled>Call</button>
+    </div>
+    <div class="ai__feed" id="ai-feed">
+      <div class="ai__empty">Click a shift on the calendar to see its history, find coverage, or chat with the scheduling copilot.</div>
+    </div>
+    <div class="cand-section" id="cand-section" hidden>
+      <div class="cand-section__title">Find coverage</div>
+      <div id="cand-list"></div>
+    </div>
+    <div class="composer">
+      <input type="text" id="chat-input" placeholder="Ask the copilot about this shift…" disabled />
+      <button class="composer__send" id="chat-send" disabled>➤</button>
+    </div>
+
+    <div class="voice" id="voice-overlay" hidden>
+      <div class="voice__label">LIVE CALL</div>
+      <div class="voice__name" id="voice-name"></div>
+      <div class="voice__timer" id="voice-timer">00:00</div>
+      <div class="voice__orbwrap">
+        <div class="voice__ring"></div><div class="voice__ring"></div><div class="voice__ring"></div>
+        <div class="voice__orb"></div>
+      </div>
+      <div class="voice__transcript" id="voice-transcript"></div>
+      <div class="voice__controls">
+        <button class="voice__btn" id="voice-mute" title="Mute">🎙️</button>
+        <button class="voice__btn voice__btn--end" id="voice-end" title="End call">⏹</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div id="toast-container"></div>
+
+<script type="module">
+import Vapi from "https://esm.sh/@vapi-ai/web@latest";
+
+const GRID_START_HOUR = 6;
+const GRID_END_HOUR = 22;
+const SLOT_PX = 46;
+
+let config = { vapi_public_key: "", vapi_assistant_primary_id: "", vapi_assistant_referral_id: "", phone_calling_enabled: false };
+let vapi = null;
+let shifts = [];
+let weekStart = startOfWeek(new Date());
+let selectedShiftId = null;
+let activeCall = null; // { shiftId, referralId } | null
+let userInitiatedStop = false;
+let chainingInProgress = false;
+let callStartedAt = null;
+let voiceTimerHandle = null;
+let popupEl = null;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function startOfWeek(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - x.getDay());
+  return x;
+}
+function addDays(d, n) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function fmtDateParts(startIso, endIso) {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  return {
+    shift_date: start.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }),
+    shift_start_time: start.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+    shift_end_time: end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+  };
+}
+
+function shiftVariableValues(s) {
+  return {
+    caregiver_name: s.assigned_caregiver_name,
+    shift_id: String(s.id),
+    ...fmtDateParts(s.shift_start, s.shift_end),
+    client_name: s.client_name,
+    client_address: s.client_address,
+  };
+}
+
+function referralVariableValues(shiftId, next) {
+  return {
+    referred_name: next.referred_name,
+    referring_caregiver_name: next.referring_caregiver_name,
+    shift_id: String(shiftId),
+    referral_id: String(next.referral_id),
+    caregiver_message: next.message || "",
+    ...fmtDateParts(next.shift_start, next.shift_end),
+    client_name: next.client_name,
+    client_address: next.client_address,
+  };
+}
+
+function showToast(msg) {
+  const container = document.getElementById("toast-container");
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  container.innerHTML = "";
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+function initials(name) {
+  return (name || "").split(" ").map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+}
+
+function needsCoverage(s) {
+  return ["pending_referral", "declined", "no_answer", "needs_human"].includes(s.status);
+}
+
+function shiftCategory(s) {
+  if (s.is_oncall) return "oncall";
+  const h = new Date(s.shift_start).getHours();
+  if (h >= 6 && h < 14) return "day";
+  if (h >= 14 && h < 21) return "evening";
+  return "night";
+}
+
+function statusModifier(s) {
+  if (s.status === "pending_referral") return "pending";
+  if (s.status === "confirmed" || s.status === "reassigned") return "covered";
+  if (s.status === "needs_human" || s.status === "declined" || s.status === "no_answer") return "open";
+  return "";
+}
+
+async function loadConfig() {
+  const res = await fetch("/config");
+  config = await res.json();
+
+  const text = document.getElementById("call-mode-text");
+  const badge = document.getElementById("call-mode-badge");
+  if (config.phone_calling_enabled) {
+    text.textContent = "Phone calling live";
+    badge.classList.remove("warn");
+  } else if (config.vapi_public_key) {
+    text.textContent = "Browser test calls only";
+    badge.classList.remove("warn");
+  } else {
+    text.textContent = "Calling not configured";
+    badge.classList.add("warn");
+  }
+
+  if (config.vapi_public_key) {
+    vapi = new Vapi(config.vapi_public_key);
+    vapi.on("call-start", () => {
+      if (activeCall) showVoiceOverlay(activeCall.shiftId);
+    });
+    vapi.on("call-end", onCallEnd);
+    vapi.on("message", onVapiMessage);
+    vapi.on("error", (e) => {
+      console.error("Vapi call error:", e);
+      if (!chainingInProgress) {
+        activeCall = null;
+        hideVoiceOverlay();
+      }
+    });
+  }
+}
+
+function onVapiMessage(msg) {
+  if (!msg || msg.type !== "transcript" || msg.transcriptType !== "final") return;
+  const el = document.getElementById("voice-transcript");
+  if (!el) return;
+  const who = msg.role === "assistant" ? "ASSISTANT" : "CALLER";
+  const line = document.createElement("div");
+  line.style.marginBottom = "14px";
+  const label = document.createElement("span");
+  label.className = "who";
+  label.textContent = who;
+  line.appendChild(label);
+  line.appendChild(document.createTextNode(msg.transcript || ""));
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function showVoiceOverlay(shiftId, label) {
+  const s = shifts.find((x) => x.id === shiftId);
+  document.getElementById("voice-name").textContent = label || (s ? s.assigned_caregiver_name : "Calling…");
+  document.getElementById("voice-transcript").innerHTML = "";
+  document.getElementById("voice-overlay").hidden = false;
+  callStartedAt = Date.now();
+  clearInterval(voiceTimerHandle);
+  voiceTimerHandle = setInterval(updateVoiceTimer, 1000);
+  updateVoiceTimer();
+  updateAiCallButton();
+}
+function hideVoiceOverlay() {
+  document.getElementById("voice-overlay").hidden = true;
+  clearInterval(voiceTimerHandle);
+  callStartedAt = null;
+  updateAiCallButton();
+}
+function updateVoiceTimer() {
+  if (!callStartedAt) return;
+  const secs = Math.floor((Date.now() - callStartedAt) / 1000);
+  const m = String(Math.floor(secs / 60)).padStart(2, "0");
+  const s = String(secs % 60).padStart(2, "0");
+  document.getElementById("voice-timer").textContent = `${m}:${s}`;
+}
+
+async function onCallEnd() {
+  const shiftId = activeCall ? activeCall.shiftId : null;
+  const wasManualStop = userInitiatedStop;
+  userInitiatedStop = false;
+  hideVoiceOverlay();
+
+  if (shiftId === null || wasManualStop) {
+    activeCall = null;
+    updateAiCallButton();
+    loadShifts();
+    return;
+  }
+
+  const res = await fetch(`/shifts/${shiftId}/next-referral`);
+  const next = await res.json().catch(() => null);
+
+  if (next) {
+    await startReferralCall(shiftId, next);
+  } else {
+    activeCall = null;
+    updateAiCallButton();
+    loadShifts();
+  }
+}
+
+async function startReferralCall(shiftId, next) {
+  chainingInProgress = true;
+  activeCall = { shiftId, referralId: next.referral_id };
+  showVoiceOverlay(shiftId, `Calling ${next.referred_name}…`);
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await sleep(attempt === 1 ? 1200 : 2000);
+    try {
+      await vapi.start(config.vapi_assistant_referral_id, { variableValues: referralVariableValues(shiftId, next) });
+      chainingInProgress = false;
+      return;
+    } catch (e) {
+      console.error(`referral call attempt ${attempt} failed:`, e);
+    }
+  }
+
+  chainingInProgress = false;
+  activeCall = null;
+  hideVoiceOverlay();
+  showToast(`Couldn't reach ${next.referred_name} — try calling again from the shift.`);
+  loadShifts();
+}
+
+function updateAiCallButton() {
+  const btn = document.getElementById("ai-call-btn");
+  if (!selectedShiftId) {
+    btn.disabled = true;
+    btn.textContent = "Call";
+    btn.classList.remove("in-call");
+    return;
+  }
+  const s = shifts.find((x) => x.id === selectedShiftId);
+  if (!s) return;
+
+  if (activeCall && activeCall.shiftId === selectedShiftId) {
+    btn.disabled = false;
+    btn.textContent = "🔴 End Call";
+    btn.classList.add("in-call");
+    return;
+  }
+  btn.classList.remove("in-call");
+  if (activeCall) {
+    btn.disabled = true;
+    return;
+  }
+  const callable = s.status === "scheduled" || s.status === "no_answer" || s.status === "pending_referral";
+  btn.disabled = !callable;
+  btn.textContent = s.status === "pending_referral" ? "Resume calls" : "Call";
+}
+
+async function handleCallPhoneClick(s) {
+  closePopup();
+  try {
+    const res = await fetch(`/shifts/${s.id}/call`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.detail || "Failed to place phone call");
+    } else {
+      showToast("Call placed");
+    }
+  } finally {
+    loadShifts();
+  }
+}
+
+async function handleCallClick(s) {
+  if (activeCall && activeCall.shiftId === s.id) {
+    userInitiatedStop = true;
+    vapi.stop();
+    closePopup();
+    return;
+  }
+
+  if (config.phone_calling_enabled) {
+    await handleCallPhoneClick(s);
+    return;
+  }
+
+  if (!vapi) {
+    showToast("Calling isn't configured — set a Vapi phone number or public key.");
+    return;
+  }
+
+  if (s.status === "pending_referral") {
+    const res = await fetch(`/shifts/${s.id}/next-referral`);
+    const next = await res.json().catch(() => null);
+    if (next) {
+      closePopup();
+      activeCall = { shiftId: s.id, referralId: next.referral_id };
+      chainingInProgress = true;
+      try {
+        await vapi.start(config.vapi_assistant_referral_id, { variableValues: referralVariableValues(s.id, next) });
+      } catch (e) {
+        console.error("resume referral call failed:", e);
+        activeCall = null;
+      } finally {
+        chainingInProgress = false;
+      }
+    } else {
+      loadShifts();
+    }
+    return;
+  }
+
+  closePopup();
+  activeCall = { shiftId: s.id, referralId: null };
+  vapi.start(config.vapi_assistant_primary_id, { variableValues: shiftVariableValues(s) });
+}
+
+function closePopup() {
+  if (popupEl) {
+    popupEl.remove();
+    popupEl = null;
+  }
+}
+
+function openShiftPopup(s, anchorEl) {
+  closePopup();
+  selectShift(s.id);
+
+  const calgrid = document.querySelector(".calgrid");
+  const gridRect = calgrid.getBoundingClientRect();
+  const anchorRect = anchorEl.getBoundingClientRect();
+  const top = anchorRect.top - gridRect.top + calgrid.scrollTop;
+  let left = anchorRect.right - gridRect.left + calgrid.scrollLeft + 8;
+  const maxLeft = calgrid.clientWidth + calgrid.scrollLeft - 244;
+  if (left > maxLeft) left = anchorRect.left - gridRect.left + calgrid.scrollLeft - 238;
+
+  const dp = fmtDateParts(s.shift_start, s.shift_end);
+  const callDisabled = !(s.status === "scheduled" || s.status === "no_answer" || s.status === "pending_referral");
+
+  const pop = document.createElement("div");
+  pop.className = "shiftpop";
+  pop.style.top = `${Math.max(4, top)}px`;
+  pop.style.left = `${Math.max(4, left)}px`;
+  pop.innerHTML = `
+    <button class="shiftpop__close" id="pop-close">✕</button>
+    <div class="shiftpop__title">${esc(s.client_name)}</div>
+    <div class="shiftpop__sub">${esc(dp.shift_date)} · ${esc(dp.shift_start_time)}–${esc(dp.shift_end_time)}</div>
+    <div class="shiftpop__phone">
+      <input type="tel" id="pop-phone" value="${esc(s.assigned_caregiver_phone)}" />
+      <button class="cand__ask" id="pop-save-phone" disabled>Save</button>
+    </div>
+    <div class="shiftpop__actions">
+      <button class="shiftpop__btn" id="pop-call" ${callDisabled ? "disabled" : ""}>${s.status === "pending_referral" ? "Resume" : "Call"}</button>
+      <button class="shiftpop__btn shiftpop__btn--phone" id="pop-call-phone" ${callDisabled || !config.phone_calling_enabled ? "disabled" : ""}>Call Phone</button>
+    </div>
+  `;
+  calgrid.appendChild(pop);
+  popupEl = pop;
+
+  document.getElementById("pop-close").addEventListener("click", closePopup);
+
+  const phoneInput = document.getElementById("pop-phone");
+  const saveBtn = document.getElementById("pop-save-phone");
+  const original = phoneInput.value;
+  phoneInput.addEventListener("input", () => {
+    phoneInput.classList.toggle("dirty", phoneInput.value !== original);
+    saveBtn.disabled = phoneInput.value === original || phoneInput.value.trim() === "";
+  });
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "…";
+    try {
+      const res = await fetch(`/caregivers/${s.assigned_caregiver_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone_number: phoneInput.value.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || "Failed to save phone number");
+      } else {
+        showToast("Phone number saved");
+      }
+    } finally {
+      loadShifts();
+    }
+  });
+
+  document.getElementById("pop-call").addEventListener("click", () => handleCallClick(s));
+  document.getElementById("pop-call-phone").addEventListener("click", () => handleCallPhoneClick(s));
+}
+
+function updateSelectedHighlight() {
+  document.querySelectorAll(".shift").forEach((el) => {
+    el.classList.toggle("shift--selected", Number(el.dataset.id) === selectedShiftId);
+  });
+}
+
+async function selectShift(id) {
+  selectedShiftId = id;
+  updateSelectedHighlight();
+  const s = shifts.find((x) => x.id === id);
+  if (!s) return;
+
+  document.getElementById("ai-title").textContent = `${s.assigned_caregiver_name} — ${s.client_name}`;
+  document.getElementById("ai-status").textContent = s.status.replace("_", " ");
+  document.getElementById("chat-input").disabled = false;
+  document.getElementById("chat-send").disabled = false;
+  updateAiCallButton();
+
+  const [activity, messages, candidates] = await Promise.all([
+    fetch(`/shifts/${id}/activity`).then((r) => r.json()),
+    fetch(`/shifts/${id}/messages`).then((r) => r.json()),
+    needsCoverage(s) ? fetch(`/shifts/${id}/candidates`).then((r) => r.json()) : Promise.resolve([]),
+  ]);
+  renderFeed(activity, messages);
+  renderCandidates(s, candidates);
+}
+
+function renderFeed(activity, messages) {
+  const items = [
+    ...activity.map((a) => ({ kind: "system", text: a.text, at: a.at })),
+    ...messages.map((m) => ({ kind: m.role === "user" ? "user" : "ai", text: m.content, at: m.created_at })),
+  ].sort((a, b) => new Date(a.at) - new Date(b.at));
+
+  const feed = document.getElementById("ai-feed");
+  if (items.length === 0) {
+    feed.innerHTML = `<div class="ai__empty">No activity yet for this shift. Ask the copilot a question below, or find coverage if it needs it.</div>`;
+    return;
+  }
+  feed.innerHTML = items.map((i) => `<div class="msg msg--${i.kind}">${esc(i.text)}</div>`).join("");
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function renderCandidates(s, candidates) {
+  const section = document.getElementById("cand-section");
+  const list = document.getElementById("cand-list");
+  if (!needsCoverage(s)) {
+    section.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  section.hidden = false;
+  if (candidates.length === 0) {
+    list.innerHTML = `<div class="ai__empty" style="padding:8px 0">No other caregivers available for this time slot.</div>`;
+    return;
+  }
+  list.innerHTML = candidates
+    .map(
+      (c) => `
+    <div class="cand">
+      <div class="cand__avatar">${esc(initials(c.name))}</div>
+      <div>
+        <div class="cand__name">${esc(c.name)}</div>
+        <div class="cand__role">${c.calls_completed} past shift call${c.calls_completed === 1 ? "" : "s"}</div>
+      </div>
+      <div class="cand__right">
+        <div class="cand__matchlabel">MATCH</div>
+        <div class="cand__match">${c.match_score}%</div>
+        <button class="cand__ask" data-id="${c.caregiver_id}">Ask</button>
+      </div>
+    </div>
+  `
+    )
+    .join("");
+
+  list.querySelectorAll(".cand__ask").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Asking…";
+      try {
+        const res = await fetch(`/shifts/${s.id}/request-coverage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ caregiver_id: Number(btn.dataset.id) }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showToast(err.detail || "Failed to request coverage");
+        } else {
+          const data = await res.json();
+          showToast(data.call_placed ? "Coverage request sent" : `Referral saved, but the call failed: ${data.call_error || "unknown error"}`);
+        }
+      } finally {
+        await loadShifts();
+        await selectShift(s.id);
+      }
+    });
+  });
+}
+
+async function sendChat() {
+  const input = document.getElementById("chat-input");
+  const text = input.value.trim();
+  if (!text || !selectedShiftId) return;
+  const shiftId = selectedShiftId;
+  input.value = "";
+  input.disabled = true;
+  document.getElementById("chat-send").disabled = true;
+
+  const feed = document.getElementById("ai-feed");
+  const emptyEl = feed.querySelector(".ai__empty");
+  if (emptyEl) emptyEl.remove();
+
+  const userBubble = document.createElement("div");
+  userBubble.className = "msg msg--user";
+  userBubble.textContent = text;
+  feed.appendChild(userBubble);
+
+  const typing = document.createElement("div");
+  typing.className = "typing";
+  typing.innerHTML = "<i></i><i></i><i></i>";
+  feed.appendChild(typing);
+  feed.scrollTop = feed.scrollHeight;
+
+  try {
+    const res = await fetch(`/shifts/${shiftId}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text }),
+    });
+    typing.remove();
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.detail || "The copilot couldn't respond");
+      return;
+    }
+    const data = await res.json();
+    const aiBubble = document.createElement("div");
+    aiBubble.className = "msg msg--ai";
+    aiBubble.textContent = data.reply;
+    feed.appendChild(aiBubble);
+    feed.scrollTop = feed.scrollHeight;
+  } finally {
+    input.disabled = false;
+    document.getElementById("chat-send").disabled = false;
+    input.focus();
+  }
+}
+
+function buildShiftBlock(s) {
+  const start = new Date(s.shift_start);
+  const end = new Date(s.shift_end);
+  const startHour = start.getHours() + start.getMinutes() / 60;
+  const endHour = Math.max(startHour + 0.5, end.getHours() + end.getMinutes() / 60);
+  const top = Math.max(0, (startHour - GRID_START_HOUR) * SLOT_PX);
+  const height = Math.max(28, (endHour - startHour) * SLOT_PX);
+
+  const cat = shiftCategory(s);
+  const mod = statusModifier(s);
+  const el = document.createElement("div");
+  el.className = `shift shift--${cat}${mod ? ` shift--${mod}` : ""}${s.id === selectedShiftId ? " shift--selected" : ""}`;
+  el.style.top = `${top}px`;
+  el.style.height = `${height}px`;
+  el.dataset.id = s.id;
+  el.innerHTML = `
+    <div class="shift__name">${esc(s.assigned_caregiver_name)}</div>
+    <div class="shift__meta">${esc(s.client_name)}</div>
+    <span class="shift__tag">${esc(s.status.replace("_", " "))}</span>
+  `;
+  el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openShiftPopup(s, el);
+  });
+  return el;
+}
+
+function renderCalendar() {
+  const inner = document.getElementById("calgrid-inner");
+  inner.innerHTML = "";
+
+  const corner = document.createElement("div");
+  corner.className = "calgrid__corner";
+  inner.appendChild(corner);
+
+  const today = new Date();
+  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+
+  days.forEach((d) => {
+    const head = document.createElement("div");
+    head.className = "calgrid__dayhead" + (sameDay(d, today) ? " calgrid__dayhead--today" : "");
+    head.innerHTML = `${d.toLocaleDateString(undefined, { weekday: "short" })}<div class="d">${d.getDate()}</div>`;
+    inner.appendChild(head);
+  });
+
+  const timecol = document.createElement("div");
+  timecol.className = "timecol";
+  for (let h = GRID_START_HOUR; h < GRID_END_HOUR; h++) {
+    const slot = document.createElement("div");
+    slot.className = "timecol__slot";
+    slot.textContent = new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: "numeric" });
+    timecol.appendChild(slot);
+  }
+  inner.appendChild(timecol);
+
+  days.forEach((d) => {
+    const col = document.createElement("div");
+    col.className = "daycol";
+    col.style.minHeight = `${(GRID_END_HOUR - GRID_START_HOUR) * SLOT_PX}px`;
+    for (let h = GRID_START_HOUR; h < GRID_END_HOUR; h++) {
+      const slot = document.createElement("div");
+      slot.className = "daycol__slot";
+      col.appendChild(slot);
+    }
+    shifts.filter((s) => sameDay(new Date(s.shift_start), d)).forEach((s) => col.appendChild(buildShiftBlock(s)));
+    inner.appendChild(col);
+  });
+
+  document.getElementById("week-title").textContent =
+    `${weekStart.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${addDays(weekStart, 6).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  document.getElementById("today-badge").textContent = today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+}
+
+function renderStats() {
+  const total = shifts.length;
+  const confirmed = shifts.filter((s) => s.status === "confirmed" || s.status === "reassigned").length;
+  const coverage = shifts.filter((s) => s.status === "pending_referral" || s.status === "declined").length;
+  const alerts = shifts.filter((s) => s.status === "needs_human" || s.status === "no_answer").length;
+  const tiles = [
+    { cls: "blue", label: "Total shifts", num: total, sub: "This week" },
+    { cls: "teal", label: "Confirmed", num: confirmed, sub: "Ready to go" },
+    { cls: "pink", label: "Needs coverage", num: coverage, sub: "Referral in progress" },
+    { cls: "red", label: "Needs attention", num: alerts, sub: "No answer / unresolved" },
+  ];
+  document.getElementById("stats-row").innerHTML = tiles
+    .map(
+      (t) => `
+    <div class="stat stat--${t.cls}">
+      <div class="stat__head"><span>${esc(t.label)}</span><span class="num">${t.num}</span></div>
+      <div class="stat__sub"><span class="stat__chip">${esc(t.sub)}</span></div>
+    </div>
+  `
+    )
+    .join("");
+}
+
+async function loadShifts() {
+  const active = document.activeElement;
+  if (active && (active.id === "pop-phone" || active.id === "chat-input")) return;
+
+  const res = await fetch("/shifts");
+  shifts = await res.json();
+  renderStats();
+  renderCalendar();
+  updateAiCallButton();
+}
+
+document.getElementById("prev-week").addEventListener("click", () => {
+  weekStart = addDays(weekStart, -7);
+  renderCalendar();
+});
+document.getElementById("next-week").addEventListener("click", () => {
+  weekStart = addDays(weekStart, 7);
+  renderCalendar();
+});
+
+document.getElementById("ai-call-btn").addEventListener("click", () => {
+  const s = shifts.find((x) => x.id === selectedShiftId);
+  if (s) handleCallClick(s);
+});
+
+document.getElementById("chat-send").addEventListener("click", sendChat);
+document.getElementById("chat-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendChat();
+});
+
+document.getElementById("voice-mute").addEventListener("click", () => {
+  if (!vapi) return;
+  const btn = document.getElementById("voice-mute");
+  const muted = !btn.classList.contains("voice__btn--muted");
+  vapi.setMuted(muted);
+  btn.classList.toggle("voice__btn--muted", muted);
+});
+document.getElementById("voice-end").addEventListener("click", () => {
+  if (!vapi) return;
+  userInitiatedStop = true;
+  vapi.stop();
+});
+
+document.getElementById("reset-btn").addEventListener("click", async (e) => {
+  if (activeCall !== null) {
+    userInitiatedStop = true;
+    vapi.stop();
+    activeCall = null;
+    hideVoiceOverlay();
+  }
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = "Resetting…";
+  try {
+    await fetch("/shifts/reset", { method: "POST" });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "↺ Reset demo data";
+    selectedShiftId = null;
+    closePopup();
+    document.getElementById("ai-title").textContent = "Select a shift";
+    document.getElementById("ai-status").textContent = "";
+    document.getElementById("ai-feed").innerHTML = `<div class="ai__empty">Click a shift on the calendar to see its history, find coverage, or chat with the scheduling copilot.</div>`;
+    document.getElementById("cand-section").hidden = true;
+    document.getElementById("chat-input").disabled = true;
+    document.getElementById("chat-send").disabled = true;
+    await loadShifts();
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (popupEl && !popupEl.contains(e.target)) closePopup();
+});
+
+await loadConfig();
+await loadShifts();
+setInterval(loadShifts, 8000);
+</script>
+</body>
 </html>

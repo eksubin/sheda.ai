@@ -37,6 +37,7 @@ CREATE TABLE shifts (
     client_name TEXT NOT NULL,
     client_address TEXT NOT NULL,
     status shift_status NOT NULL DEFAULT 'scheduled',
+    is_oncall BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -67,10 +68,20 @@ CREATE TABLE call_logs (
     ended_at TIMESTAMPTZ
 );
 
+-- AI chat panel conversation log, one row per message, per shift.
+CREATE TABLE shift_messages (
+    id SERIAL PRIMARY KEY,
+    shift_id INTEGER NOT NULL REFERENCES shifts(id),
+    role TEXT NOT NULL, -- 'user' | 'assistant'
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX idx_shifts_status ON shifts(status);
 CREATE INDEX idx_referrals_shift_id ON referrals(shift_id);
 CREATE INDEX idx_call_logs_shift_id ON call_logs(shift_id);
 CREATE INDEX idx_call_logs_vapi_call_id ON call_logs(vapi_call_id);
+CREATE INDEX idx_shift_messages_shift_id ON shift_messages(shift_id);
 
 -- Seed data: demo caregivers + demo shifts across a range of statuses
 INSERT INTO caregivers (name, phone_number) VALUES
@@ -96,3 +107,5 @@ VALUES
 
     (5, 5, now() + interval '3 days' + interval '9 hours', now() + interval '3 days' + interval '13 hours',
      'Grace Whitmore', '903 Cedar St, Capital City', 'needs_human');
+
+UPDATE shifts SET is_oncall = true WHERE id = 3;
