@@ -15,6 +15,8 @@
   button:hover { background: #8882; }
   button:disabled { opacity: 0.5; cursor: default; }
   button.call-btn.in-call { border-color: #dc2626; color: #dc2626; }
+  button.call-phone-btn { border-color: #2563eb; color: #2563eb; margin-left: 6px; }
+  .actions-cell { display: flex; align-items: center; }
   input.phone-input { width: 130px; padding: 5px 7px; border-radius: 6px; border: 1px solid #3336; background: transparent; font-size: 0.85rem; color: inherit; }
   input.phone-input.dirty { border-color: #d97706; }
   .phone-cell { display: flex; align-items: center; gap: 6px; }
@@ -185,6 +187,16 @@ function setCallUI(shiftId, state, label) {
       btn.disabled = s !== "scheduled" && s !== "no_answer" && s !== "pending_referral";
     }
   });
+
+  rowsEl.querySelectorAll("button.call-phone-btn").forEach((btn) => {
+    if (state === "in-call") {
+      btn.disabled = true;
+    } else {
+      const s = btn.dataset.status;
+      const statusOk = s === "scheduled" || s === "no_answer" || s === "pending_referral";
+      btn.disabled = !statusOk || !config.phone_calling_enabled;
+    }
+  });
 }
 
 async function refreshBadges() {
@@ -233,7 +245,10 @@ async function loadShifts() {
         </div>
       </td>
       <td><span class="badge badge-${s.status}">${s.status.replace("_", " ")}</span></td>
-      <td><button class="call-btn" data-id="${s.id}" data-status="${s.status}" ${callDisabled ? "disabled" : ""}>${callLabel}</button></td>
+      <td class="actions-cell">
+        <button class="call-btn" data-id="${s.id}" data-status="${s.status}" ${callDisabled ? "disabled" : ""}>${callLabel}</button>
+        <button class="call-phone-btn" data-id="${s.id}" data-status="${s.status}" ${callDisabled || !config.phone_calling_enabled ? "disabled" : ""} title="${config.phone_calling_enabled ? "Place a real outbound call via Twilio" : "Configure a Vapi phone number to enable real calls"}">Call Phone</button>
+      </td>
     `;
     tr.dataset.shift = JSON.stringify(s);
     rowsEl.appendChild(tr);
@@ -323,6 +338,23 @@ async function loadShifts() {
       }
 
       alert("Calling isn't configured yet — set a Vapi phone number or public key.");
+    });
+  });
+
+  rowsEl.querySelectorAll("button.call-phone-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const shiftId = Number(btn.dataset.id);
+      btn.disabled = true;
+      btn.textContent = "Calling…";
+      try {
+        const res = await fetch(`/shifts/${shiftId}/call`, { method: "POST" });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.detail || "Failed to place phone call");
+        }
+      } finally {
+        loadShifts();
+      }
     });
   });
 }
