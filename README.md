@@ -1,8 +1,16 @@
+<p align="center">
+  <img src="logo.jpeg" alt="Sheda AI logo" width="240" />
+</p>
+
 # Sheda AI
 
 Sheda AI is a voice-AI scheduling agent for nurse and home-care managers, built for the Arya Health Hack. It calls caregivers to confirm upcoming shifts, and if someone can't make it and names a coworker to cover, it automatically calls that person too — a live, automated hand-off chain. Everything lands in Postgres in real time and shows up on a calendar dashboard where a manager can also ask an AI copilot about any shift, or manually request coverage from a ranked list of available caregivers.
 
 See [CLAUDE.md](CLAUDE.md) for full architecture, flow, and Vapi integration notes.
+
+## Preview
+
+![Sheda AI dashboard — week calendar with color-coded shifts and an AI copilot side panel](ui.jpeg)
 
 ## What it does
 
