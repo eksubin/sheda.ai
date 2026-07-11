@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ShiftConfirm</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  p.sub { color: #888; margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #3333; font-size: 0.9rem; }
+  th { color: #888; font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em; }
+  button { padding: 6px 12px; border-radius: 6px; border: 1px solid #3336; background: transparent; cursor: pointer; font-size: 0.85rem; }
+  button:hover { background: #8882; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.call-btn.in-call { border-color: #dc2626; color: #dc2626; }
+  input.phone-input { width: 130px; padding: 5px 7px; border-radius: 6px; border: 1px solid #3336; background: transparent; font-size: 0.85rem; color: inherit; }
+  input.phone-input.dirty { border-color: #d97706; }
+  .phone-cell { display: flex; align-items: center; gap: 6px; }
+  .save-note { font-size: 0.75rem; color: #16a34a; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+  .badge-scheduled { background: #6b7280; color: #fff; }
+  .badge-confirmed, .badge-reassigned { background: #16a34a; color: #fff; }
+  .badge-declined, .badge-needs_human { background: #dc2626; color: #fff; }
+  .badge-pending_referral { background: #d97706; color: #fff; }
+  .badge-no_answer { background: #6b7280; color: #fff; }
+  #refresh-note { color: #888; font-size: 0.8rem; }
+  #call-mode-note { font-size: 0.8rem; padding: 8px 12px; border-radius: 8px; background: #8882; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h1>ShiftConfirm</h1>
+  <p class="sub">Caregiver shift confirmation dashboard</p>
+  <p id="refresh-note">Auto-refreshing every 4s… <button id="reset-btn" title="Reset all shifts to scheduled and clear referrals/call logs">↺ Reset demo data</button></p>
+  <p id="call-mode-note"></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Shift</th>
+        <th>Client</th>
+        <th>Assigned To</th>
+        <th>Phone</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="shift-rows"></tbody>
+  </table>
+
+<script type="module">
+import Vapi from "https://esm.sh/@vapi-ai/web@latest";
+
+const rowsEl = document.getElementById("shift-rows");
+const callModeNoteEl = document.getElementById("call-mode-note");
+
+let config = { vapi_public_key: "", vapi_assistant_primary_id: "", vapi_assistant_referral_id: "", phone_calling_enabled: false };
+let vapi = null;
+let activeCall = null; // { shiftId, referralId } | null
+let userInitiatedStop = false;
+let chainingInProgress = false;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function fmtDateParts(startIso, endIso) {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  return {
+    shift_date: start.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }),
+    shift_start_time: start.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+    shift_end_time: end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+  };
+}
+
+function shiftVariableValues(s) {
+  return {
+    caregiver_name: s.assigned_caregiver_name,
+    shift_id: String(s.id),
+    ...fmtDateParts(s.shift_start, s.shift_end),
+    client_name: s.client_name,
+    client_address: s.client_address,
+  };
+}
+
+function referralVariableValues(shiftId, next) {
+  return {
+    referred_name: next.referred_name,
+    referring_caregiver_name: next.referring_caregiver_name,
+    shift_id: String(shiftId),
+    referral_id: String(next.referral_id),
+    caregiver_message: next.message || "",
+    ...fmtDateParts(next.shift_start, next.shift_end),
+    client_name: next.client_name,
+    client_address: next.client_address,
+  };
+}
+
+async function loadConfig() {
+  const res = await fetch("/config");
+  config = await res.json();
+
+  if (config.phone_calling_enabled) {
+    callModeNoteEl.textContent = "📞 Real phone calling is enabled (Twilio number configured via Vapi).";
+  } else if (config.vapi_public_key) {
+    callModeNoteEl.textContent = "🎙️ No phone number configured — Call opens a browser mic call with the assistant instead.";
+    vapi = new Vapi(config.vapi_public_key);
+    vapi.on("call-start", () => activeCall && setCallUI(activeCall.shiftId, "in-call"));
+    vapi.on("call-end", onCallEnd);
+    vapi.on("error", (e) => {
+      console.error("Vapi call error:", e);
+      // don't kill a chained hand-off: onCallEnd/startReferralCall manage their own state
+      if (!chainingInProgress) {
+        activeCall = null;
+        setCallUI(null, "idle");
+      }
+    });
+  } else {
+    callModeNoteEl.textContent = "⚠️ No phone number or Vapi public key configured — calling is disabled.";
+  }
+}
+
+async function onCallEnd() {
+  const shiftId = activeCall ? activeCall.shiftId : null;
+  const wasManualStop = userInitiatedStop;
+  userInitiatedStop = false;
+
+  if (shiftId === null || wasManualStop) {
+    activeCall = null;
+    setCallUI(null, "idle");
+    return;
+  }
+
+  const res = await fetch(`/shifts/${shiftId}/next-referral`);
+  const next = await res.json().catch(() => null);
+
+  if (next) {
+    await startReferralCall(shiftId, next);
+  } else {
+    activeCall = null;
+    setCallUI(null, "idle");
+    loadShifts();
+  }
+}
+
+async function startReferralCall(shiftId, next) {
+  chainingInProgress = true;
+  activeCall = { shiftId, referralId: next.referral_id };
+  setCallUI(shiftId, "in-call", `Calling ${next.referred_name}…`);
+
+  // give the SDK a beat to tear down the previous call's room, then retry once if needed
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await sleep(attempt === 1 ? 1200 : 2000);
+    try {
+      await vapi.start(config.vapi_assistant_referral_id, {
+        variableValues: referralVariableValues(shiftId, next),
+      });
+      chainingInProgress = false;
+      return;
+    } catch (e) {
+      console.error(`referral call attempt ${attempt} failed:`, e);
+    }
+  }
+
+  chainingInProgress = false;
+  activeCall = null;
+  setCallUI(null, "idle");
+  callModeNoteEl.textContent = `⚠️ Couldn't start the follow-up call to ${next.referred_name} — click Call on the shift to retry.`;
+  loadShifts();
+}
+
+function setCallUI(shiftId, state, label) {
+  rowsEl.querySelectorAll("button.call-btn").forEach((btn) => {
+    const isThisRow = Number(btn.dataset.id) === shiftId;
+    btn.classList.toggle("in-call", state === "in-call" && isThisRow);
+    btn.textContent = state === "in-call" && isThisRow ? (label || "🔴 End Call") : "Call";
+    if (state === "in-call") {
+      btn.disabled = !isThisRow;
+    } else {
+      const s = btn.dataset.status;
+      btn.disabled = s !== "scheduled" && s !== "no_answer" && s !== "pending_referral";
+    }
+  });
+}
+
+async function refreshBadges() {
+  // lightweight mid-call refresh: update status badges in place without
+  // rebuilding the table (which would clobber the active call button)
+  const res = await fetch("/shifts");
+  const shifts = await res.json();
+  for (const s of shifts) {
+    const btn = rowsEl.querySelector(`button.call-btn[data-id="${s.id}"]`);
+    if (!btn) continue;
+    btn.dataset.status = s.status;
+    const badge = btn.closest("tr").querySelector(".badge");
+    if (badge) {
+      badge.className = `badge badge-${s.status}`;
+      badge.textContent = s.status.replace("_", " ");
+    }
+  }
+}
+
+async function loadShifts() {
+  // don't clobber an in-progress phone edit on auto-refresh
+  if (document.activeElement && document.activeElement.classList.contains("phone-input")) {
+    return;
+  }
+  // mid-call: refresh just the badges so status changes show live
+  if (activeCall !== null) {
+    await refreshBadges().catch(() => {});
+    return;
+  }
+
+  const res = await fetch("/shifts");
+  const shifts = await res.json();
+  rowsEl.innerHTML = "";
+  for (const s of shifts) {
+    const tr = document.createElement("tr");
+    const callDisabled = s.status !== "scheduled" && s.status !== "no_answer" && s.status !== "pending_referral";
+    const callLabel = s.status === "pending_referral" ? "Resume calls" : "Call";
+    tr.innerHTML = `
+      <td>${fmtTime(s.shift_start)}</td>
+      <td>${s.client_name}</td>
+      <td>${s.assigned_caregiver_name}</td>
+      <td>
+        <div class="phone-cell">
+          <input class="phone-input" type="tel" value="${s.assigned_caregiver_phone}" data-caregiver-id="${s.assigned_caregiver_id}" />
+          <button class="save-btn" data-caregiver-id="${s.assigned_caregiver_id}" disabled>Save</button>
+        </div>
+      </td>
+      <td><span class="badge badge-${s.status}">${s.status.replace("_", " ")}</span></td>
+      <td><button class="call-btn" data-id="${s.id}" data-status="${s.status}" ${callDisabled ? "disabled" : ""}>${callLabel}</button></td>
+    `;
+    tr.dataset.shift = JSON.stringify(s);
+    rowsEl.appendChild(tr);
+  }
+
+  rowsEl.querySelectorAll("input.phone-input").forEach((input) => {
+    const original = input.value;
+    input.addEventListener("input", () => {
+      input.classList.toggle("dirty", input.value !== original);
+      input.nextElementSibling.disabled = input.value === original || input.value.trim() === "";
+    });
+  });
+
+  rowsEl.querySelectorAll("button.save-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const input = btn.previousElementSibling;
+      btn.disabled = true;
+      btn.textContent = "Saving…";
+      try {
+        const res = await fetch(`/caregivers/${btn.dataset.caregiverId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone_number: input.value.trim() }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.detail || "Failed to save phone number");
+        }
+      } finally {
+        loadShifts();
+      }
+    });
+  });
+
+  rowsEl.querySelectorAll("button.call-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const shiftId = Number(btn.dataset.id);
+
+      // already in a browser call on this row (primary or chained referral) -> end the whole chain
+      if (activeCall && activeCall.shiftId === shiftId) {
+        userInitiatedStop = true;
+        vapi.stop();
+        return;
+      }
+
+      if (config.phone_calling_enabled) {
+        btn.disabled = true;
+        btn.textContent = "Calling…";
+        try {
+          await fetch(`/shifts/${shiftId}/call`, { method: "POST" });
+        } finally {
+          loadShifts();
+        }
+        return;
+      }
+
+      if (vapi) {
+        const s = JSON.parse(btn.closest("tr").dataset.shift);
+
+        // pending_referral -> resume the referral chain rather than re-calling the caregiver
+        if (s.status === "pending_referral") {
+          const res = await fetch(`/shifts/${shiftId}/next-referral`);
+          const next = await res.json().catch(() => null);
+          if (next) {
+            btn.textContent = "Connecting…";
+            activeCall = { shiftId, referralId: next.referral_id };
+            chainingInProgress = true;
+            try {
+              await vapi.start(config.vapi_assistant_referral_id, { variableValues: referralVariableValues(shiftId, next) });
+            } catch (e) {
+              console.error("resume referral call failed:", e);
+              activeCall = null;
+              setCallUI(null, "idle");
+            } finally {
+              chainingInProgress = false;
+            }
+          } else {
+            loadShifts();
+          }
+          return;
+        }
+
+        activeCall = { shiftId, referralId: null };
+        btn.textContent = "Connecting…";
+        vapi.start(config.vapi_assistant_primary_id, { variableValues: shiftVariableValues(s) });
+        return;
+      }
+
+      alert("Calling isn't configured yet — set a Vapi phone number or public key.");
+    });
+  });
+}
+
+document.getElementById("reset-btn").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  if (activeCall !== null) {
+    userInitiatedStop = true;
+    vapi.stop();
+    activeCall = null;
+  }
+  btn.disabled = true;
+  btn.textContent = "Resetting…";
+  try {
+    await fetch("/shifts/reset", { method: "POST" });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "↺ Reset demo data";
+    loadShifts();
+  }
+});
+
+await loadConfig();
+await loadShifts();
+setInterval(loadShifts, 4000);
+</script>
+</body>
+</html>

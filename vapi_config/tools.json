@@ -1,0 +1,134 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "lookup_shift",
+        "description": "Call this as soon as the caller tells you their name, to look up their upcoming shift details in the schedule.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "caregiver_name": {
+              "type": "string",
+              "description": "The caregiver's name, as they said it on the call."
+            }
+          },
+          "required": ["caregiver_name"]
+        }
+      },
+      "server": {
+        "url": "{WEBHOOK_BASE_URL}/vapi/webhook"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "confirm_shift",
+        "description": "Call this when the caregiver confirms they can work their scheduled shift.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      },
+      "server": {
+        "url": "{WEBHOOK_BASE_URL}/vapi/webhook"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "decline_shift",
+        "description": "Call this when the caregiver says they can't make the shift and does not have a friend or colleague to refer as a replacement.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      },
+      "server": {
+        "url": "{WEBHOOK_BASE_URL}/vapi/webhook"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "lookup_coworker",
+        "description": "Call this whenever the caregiver names a coworker who might cover the shift, to check whether that person is already in the system (in which case no phone number is needed).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The coworker's name as the caller said it."
+            }
+          },
+          "required": ["name"]
+        }
+      },
+      "server": {
+        "url": "{WEBHOOK_BASE_URL}/vapi/webhook"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "refer_replacement",
+        "description": "Call this once the caregiver has finished listing everyone (up to 3 people) who might be able to cover the shift. Phone numbers are only needed for people who are NOT already in the system (per lookup_coworker).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "candidates": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "description": "Up to 3 people who might cover the shift, in the order the caregiver mentioned them.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the coworker/friend being referred as a replacement."
+                  },
+                  "phone_number": {
+                    "type": "string",
+                    "description": "Phone number, in E.164 format if possible (e.g. +15555550123). Omit for people already found in the system via lookup_coworker."
+                  }
+                },
+                "required": ["name"]
+              }
+            },
+            "message_for_candidates": {
+              "type": "string",
+              "description": "An optional personal message from the caregiver to relay to each person being called, if they gave one."
+            }
+          },
+          "required": ["candidates"]
+        }
+      },
+      "server": {
+        "url": "{WEBHOOK_BASE_URL}/vapi/webhook"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "confirm_replacement",
+        "description": "Call this once the referred friend has clearly stated whether they accept or decline covering the shift.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "accepted": {
+              "type": "boolean",
+              "description": "True if the person agreed to cover the shift, false if they declined."
+            }
+          },
+          "required": ["accepted"]
+        }
+      },
+      "server": {
+        "url": "{WEBHOOK_BASE_URL}/vapi/webhook"
+      }
+    }
+  ]
+}
